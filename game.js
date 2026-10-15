@@ -68,6 +68,7 @@ class Asteroid {
     this.y    = y;
     this.size = size;
     this.radius = RADII[size];
+    this.points = POINTS[size];
     this.dead = false;
 
     const angle = rand(0, Math.PI * 2);
@@ -101,6 +102,9 @@ class Asteroid {
     ];
   }
 
+  // Hook: se llama cuando una bala lo destruye
+  onShotDown() {}
+
   draw() {
     ctx.save();
     ctx.translate(this.x, this.y);
@@ -116,6 +120,104 @@ class Asteroid {
     ctx.stroke();
     ctx.restore();
   }
+}
+
+// ── Asteroide especial ────────────────────────────────────────────────────────
+class SpecialAsteroid extends Asteroid {
+  constructor(x, y) {
+    super(x, y, 3);
+    // Velocidad explícita: la base heredada arrastra ruido rand(-15, 15)
+    const SPEED_MIN = 150, SPEED_MAX = 210;  // px/s: cruza la pantalla en ~4-5 s
+    const mag = Math.hypot(this.vx, this.vy) || 1;
+    const speed = rand(SPEED_MIN, SPEED_MAX);
+    this.vx = this.vx / mag * speed;
+    this.vy = this.vy / mag * speed;
+    const ROT_MIN = 4, ROT_MAX = 6;
+    this.rotSpeed = rand(ROT_MIN, ROT_MAX) * (Math.random() < 0.5 ? -1 : 1);
+    this.points = 60;   // bonus: x3 lo que vale un asteroide grande
+    this.age = 0;
+    this.lifetime = 10;  // desaparece solo a los 10 segundos
+  }
+
+  update(dt) {
+    super.update(dt);
+    this.age += dt;
+    if (this.age >= this.lifetime) this.dead = true;
+  }
+
+  split() { return []; }  // no se escinde: se rompe en fragmentos
+
+  onShotDown() {
+    spawnDebris(this.x, this.y, 18);
+  }
+
+  draw() {
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(this.rot);
+    // Contorno rojo parpadeante
+    ctx.strokeStyle = Math.floor(this.age * 6) % 2 === 0
+      ? 'rgba(255, 0, 0, 1)'
+      : 'rgba(255, 0, 0, 0.15)';
+    ctx.lineWidth   = 1.5;
+    ctx.lineJoin    = 'round';
+    ctx.beginPath();
+    ctx.moveTo(this.verts[0][0], this.verts[0][1]);
+    for (let i = 1; i < this.verts.length; i++)
+      ctx.lineTo(this.verts[i][0], this.verts[i][1]);
+    ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Fragmentos del asteroide especial ────────────────────────────────────────
+class Debris {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    const angle = rand(0, Math.PI * 2);
+    const SPEED_MIN = 500, SPEED_MAX = 800;  // muy rápidos
+    const speed = rand(SPEED_MIN, SPEED_MAX);
+    this.vx = Math.cos(angle) * speed;
+    this.vy = Math.sin(angle) * speed;
+    this.size = rand(2, 4);
+    this.ttl  = 2;   // máximo 2 segundos en escena
+    this.life = this.ttl;
+    this.dead = false;
+    this.color = `hsl(${randInt(0, 15)}, 100%, ${randInt(45, 60)}%)`;
+  }
+
+  update(dt) {
+    this.x += this.vx * dt;
+    this.y += this.vy * dt;
+    this.ttl -= dt;
+    // Fuera de la escena o agotada su vida -> desaparece
+    if (this.ttl <= 0 ||
+        this.x < -this.size || this.x > W + this.size ||
+        this.y < -this.size || this.y > H + this.size)
+      this.dead = true;
+  }
+
+  draw() {
+    const alpha = Math.max(this.ttl / this.life, 0);
+    ctx.save();
+    ctx.translate(this.x, this.y);
+    ctx.rotate(Math.atan2(this.vy, this.vx));
+    ctx.fillStyle = this.color;
+    ctx.globalAlpha = alpha;
+    ctx.beginPath();
+    ctx.moveTo(this.size, 0);
+    ctx.lineTo(-this.size,  this.size * 0.7);
+    ctx.lineTo(-this.size, -this.size * 0.7);
+    ctx.closePath();
+    ctx.fill();
+    ctx.restore();
+  }
+}
+
+function spawnDebris(x, y, count = 18) {
+  for (let i = 0; i < count; i++) debris.push(new Debris(x, y));
 }
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
@@ -285,7 +387,8 @@ class SpeedPowerup {
 }
 
 // ── Estado del juego ──────────────────────────────────────────────────────────
-let ship, bullets, asteroids, particles, powerups;
+let ship, bullets, asteroids, particles, powerups, debris;
+let specialTimer;
 let score, lives, level;
 let state;      // 'playing' | 'dead' | 'gameover'
 let deadTimer;
@@ -302,12 +405,24 @@ function spawnAsteroids(count) {
   }
 }
 
+function spawnSpecial() {
+  const SAFE_DIST = 130;
+  let x, y;
+  do {
+    x = rand(0, W);
+    y = rand(0, H);
+  } while (Math.hypot(x - ship.x, y - ship.y) < SAFE_DIST);
+  asteroids.push(new SpecialAsteroid(x, y));
+}
+
 function initGame() {
   ship          = new Ship();
   bullets   = [];
   asteroids = [];
   particles = [];
   powerups  = [];
+  debris    = [];
+  specialTimer = 4;   // primer especial pronto; luego cada 10 s
   score  = 0;
   lives  = 3;
   level  = 1;
@@ -320,6 +435,7 @@ function nextLevel() {
   bullets   = [];
   particles = [];
   powerups  = [];
+  debris    = [];
   ship.reset();
   spawnAsteroids(3 + level);
 }
@@ -346,6 +462,8 @@ function update(dt) {
     if (pressed('Space')) initGame();
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
+    debris.forEach(d => d.update(dt));
+    debris = debris.filter(d => !d.dead);
     return;
   }
 
@@ -353,9 +471,19 @@ function update(dt) {
     deadTimer -= dt;
     particles.forEach(p => p.update(dt));
     particles = particles.filter(p => !p.dead);
+    debris.forEach(d => d.update(dt));
+    debris = debris.filter(d => !d.dead);
     asteroids.forEach(a => a.update(dt));
     if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
     return;
+  }
+
+  // Aparición periódica del asteroide especial (cada 10 s)
+  specialTimer -= dt;
+  if (specialTimer <= 0) {
+    specialTimer = 10;
+    // No spawnea si el campo está vacío: no debe bloquear el fin de nivel
+    if (asteroids.length > 0) spawnSpecial();
   }
 
   // Disparar
@@ -368,7 +496,9 @@ function update(dt) {
   asteroids.forEach(a => a.update(dt));
   particles.forEach(p => p.update(dt));
   powerups.forEach(p => p.update(dt));
+  debris.forEach(d => d.update(dt));
   powerups = powerups.filter(p => !p.dead);
+  debris    = debris.filter(d => !d.dead);
 
   bullets   = bullets.filter(b => !b.dead);
   particles = particles.filter(p => !p.dead);
@@ -380,7 +510,8 @@ function update(dt) {
       if (!a.dead && !b.dead && dist(b, a) < a.radius) {
         b.dead = true;
         a.dead = true;
-        score += POINTS[a.size];
+        score += a.points;
+        a.onShotDown();
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
         // 8% de probabilidad de soltar power-up de velocidad
@@ -469,6 +600,7 @@ function draw() {
   ctx.fillRect(0, 0, W, H);
 
   particles.forEach(p => p.draw());
+  debris.forEach(d => d.draw());
   asteroids.forEach(a => a.draw());
   bullets.forEach(b => b.draw());
   powerups.forEach(p => p.draw());
