@@ -44,5 +44,7 @@ Luego visita `http://localhost:3000`.
 - 3 vidas con invencibilidad temporal al reaparecer (parpadeo)
 - Asteroides se parten en fragmentos más pequeños al ser destruidos
 - Partículas de explosión al destruir asteroides
-- Power-ups sueltos por asteroides: velocidad x2 y escudo temporal
+- Power-ups sueltos por asteroides: velocidad x2, disparo triple y escudo temporal
+- Disparo triple: 3 balas en abanico durante 5 s
 - Escudo: anillo verde que vaporiza asteroides al contacto durante 6 s
+- 5 pieles seleccionables para la nave con la tecla `S`
