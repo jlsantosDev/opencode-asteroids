@@ -1,0 +1,133 @@
+# Triage automático de issues nuevos.
+# Al crear un issue: le añade etiquetas (tipo + prioridad) y una sección
+# "Contexto para revisión" al final del cuerpo, dejando el texto original intacto.
+#
+# Autenticación: sin GITHUB_TOKEN. El runner intercambia su token OIDC por un
+# token de instalación de la GitHub App de OpenCode (mismo mecanismo que usa
+# opencode.yml), y todos los cambios al issue se hacen con ese token.
+name: Triage de issues
+
+on:
+  issues:
+    types: [opened]
+
+permissions:
+  id-token: write   # necesario para pedir el OIDC del runner
+  contents: read    # necesario para actions/checkout
+
+jobs:
+  triage:
+    # Ignorar issues creados por bots (incluye los creados por Actions) para evitar bucles
+    if: github.event.sender.type != 'Bot'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - name: Checkout del repositorio
+        uses: actions/checkout@v6
+        with:
+          persist-credentials: false
+
+      # Intercambia el OIDC del runner (audience opencode-github-action) por un
+      # token de instalación de la GitHub App de OpenCode y lo expone como
+      # GH_TOKEN para el resto de pasos. add-mask evita que el token aparezca
+      # en los logs.
+      - name: Obtener token de la GitHub App de OpenCode
+        run: |
+          oidc=$(curl -sfS \
+            -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=opencode-github-action" | jq -r '.value')
+          respuesta=$(curl -sfS -X POST \
+            -H "Authorization: Bearer $oidc" \
+            https://api.opencode.ai/exchange_github_app_token)
+          token=$(echo "$respuesta" | jq -r '.token')
+          if [ -z "$token" ] || [ "$token" = "null" ]; then
+            echo "No se pudo obtener el token de la App. Respuesta: $respuesta"
+            exit 1
+          fi
+          echo "::add-mask::$token"
+          echo "GH_TOKEN=$token" >> "$GITHUB_ENV"
+
+      # Crear las etiquetas si no existen (--force las actualiza si ya existen),
+      # así el paso del agente nunca falla por un label inexistente.
+      - name: Garantizar etiquetas del repositorio
+        run: |
+          ensure_label() {
+            gh label create "$1" --color "$2" --description "$3" --force >/dev/null 2>&1 || true
+          }
+          ensure_label bug         d73a4a "Error o comportamiento incorrecto"
+          ensure_label enhancement a2eeef "Mejora o nueva funcionalidad"
+          ensure_label docs        0075ca "Documentación y README"
+          ensure_label question    d876e3 "Duda o petición de información"
+          ensure_label gameplay    fbca04 "Mecánicas del juego (físicas, colisiones, puntuación)"
+          ensure_label ui          1d76db "Interfaz, canvas y renderizado"
+          ensure_label setup       0e8a16 "Instalación, entorno y ejecución"
+          ensure_label high        b60205 "Prioridad alta"
+          ensure_label medium      fbca04 "Prioridad media"
+          ensure_label low         c2e0c6 "Prioridad baja"
+
+      - name: Instalar OpenCode CLI
+        run: |
+          curl -fsSL https://opencode.ai/install | bash
+          echo "$HOME/.opencode/bin" >> "$GITHUB_PATH"
+
+      # El agente recibe los datos del evento por variables de entorno y opera
+      # con gh (autenticado con el GH_TOKEN de la App, exportado antes).
+      # El prompt va en un heredoc entrecomillado ('EOF') para que el shell no
+      # expanda nada: las variables las usa el agente.
+      - name: Clasificar y formatear el issue
+        env:
+          OPENCODE_API_KEY: ${{ secrets.OPENCODE_API_KEY }}
+          ISSUE_NUMBER: ${{ github.event.issue.number }}
+          ISSUE_AUTHOR: ${{ github.event.issue.user.login }}
+          ISSUE_CREATED_AT: ${{ github.event.issue.created_at }}
+          ISSUE_URL: ${{ github.event.issue.html_url }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+          GIT_SHA: ${{ github.sha }}
+        run: |
+          PROMPT=$(cat <<'EOF'
+          Eres el agente de triage de issues de este repositorio. Acaba de crearse un issue y tu única tarea es: (1) etiquetarlo y (2) añadir una sección de contexto al FINAL de su cuerpo. Trabaja en español.
+
+          DATOS DEL EVENTO: están en variables de entorno, consúltalas con printenv si lo necesitas: ISSUE_NUMBER, ISSUE_AUTHOR, ISSUE_CREATED_AT, ISSUE_URL, REPO_URL, GIT_SHA. El CLI gh ya está autenticado (GH_TOKEN).
+
+          PASOS:
+          1. Guarda el cuerpo original en un archivo temporal:
+             gh api "repos/{owner}/{repo}/issues/$ISSUE_NUMBER" --jq '.body' > /tmp/original.md
+          2. Idempotencia: si /tmp/original.md ya contiene el texto "📋 Contexto para revisión", el issue ya fue procesado: termina inmediatamente sin hacer nada.
+          3. Lee título y cuerpo y decide:
+             - UNA etiqueta de tipo entre: bug, enhancement, docs, question, gameplay, ui, setup.
+               Significados: bug = algo no funciona; enhancement = mejora o funcionalidad nueva; docs = documentación o README; question = duda; gameplay = mecánicas del juego (físicas, colisiones, puntuación, envolvimiento de bordes); ui = interfaz, canvas o renderizado; setup = instalación, entorno o ejecución.
+             - UNA etiqueta de prioridad entre: high (rompe el juego o bloquea), medium (afecta a una funcionalidad concreta), low (menor, cosmético o una duda).
+          4. Añade las dos etiquetas (ya existen en el repo, NO las crees):
+             gh issue edit "$ISSUE_NUMBER" --add-label "<tipo>,<prioridad>"
+          5. Escribe la sección de contexto en /tmp/seccion.md con EXACTAMENTE esta estructura, rellenando los valores reales:
+
+          ---
+
+          ## 📋 Contexto para revisión (auto-generado)
+
+          > Añadido automáticamente por el workflow de triage. El texto original no ha sido modificado.
+
+          - **Autor:** @<ISSUE_AUTHOR>
+          - **Creado:** <fecha legible en UTC derivada de ISSUE_CREATED_AT, formato dd/mm/aaaa HH:MM>
+          - **Issue:** #<ISSUE_NUMBER>
+          - **Archivos mencionados:** <para cada archivo del repo citado en el texto (p. ej. game.js, index.html, README.md): [nombre](REPO_URL/blob/GIT_SHA/<archivo>). Solo enlaza archivos que existan (verifícalo con ls). Si no se menciona ninguno, escribe "Ninguno".>
+          - **Resumen:** <2-4 frases propias en español sobre qué reporta y qué área del juego afecta.>
+
+          6. Construye el cuerpo nuevo sin alterar el original (la sección debe empezar tras una línea en blanco) y edita el issue:
+             printf '\n' >> /tmp/original.md
+             cat /tmp/original.md /tmp/seccion.md > /tmp/nuevo.md
+             gh issue edit "$ISSUE_NUMBER" --body-file /tmp/nuevo.md
+
+          REGLAS ESTRICTAS:
+          - El texto original debe quedar exactamente igual: ni corregirlo, ni traducirlo, ni reformatearlo, ni recortarlo.
+          - No inventes información: si el issue es ambiguo o le falta información, dilo dentro del Resumen.
+          - No añadas checklists, sugerencias técnicas ni nada fuera de la estructura indicada.
+          - Usa solo etiquetas de las listas anteriores.
+          - PROHIBIDO: comentar en el issue, cerrarlo o reabrirlo, asignar personas, crear o eliminar etiquetas, crear ramas o PRs, o modificar cualquier archivo del repositorio.
+          - Al terminar, responde en una sola línea con las etiquetas aplicadas.
+          EOF
+          )
+          opencode run --model opencode-go/glm-5.3-flash --auto "$PROMPT"
