@@ -47,4 +47,4 @@ Luego visita `http://localhost:3000`.
 - Power-ups sueltos por asteroides: velocidad x2, disparo triple y escudo temporal
 - Disparo triple: 3 balas en abanico durante 5 s
 - Escudo: anillo verde que vaporiza asteroides al contacto durante 6 s
-- 5 pieles seleccionables para la nave con la tecla `S`
+- 6 pieles seleccionables para la nave con la tecla `S`
