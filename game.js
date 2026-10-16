@@ -221,6 +221,8 @@ function spawnDebris(x, y, count = 18) {
 }
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
+const SPREAD = 0.18;   // rad: apertura de las balas laterales del disparo triple (~10°)
+
 class Ship {
   constructor() { this.reset(); }
 
@@ -235,6 +237,7 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.speedBoost    = 0;   // segundos restantes de velocidad x2
+    this.tripleShot    = 0;   // segundos restantes de disparo triple
     this.dead          = false;
   }
 
@@ -242,6 +245,7 @@ class Ship {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.tripleShot    > 0) this.tripleShot    -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = this.speedBoost > 0 ? 520 : 260;  // px/s² (doble con boost)
@@ -276,6 +280,14 @@ class Ship {
     const NOSE = 21;
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
+    if (this.tripleShot > 0) {
+      // Abanico de 3: recta al frente + dos laterales ligeramente abiertas
+      return [
+        new Bullet(ox, oy, this.angle - SPREAD),
+        new Bullet(ox, oy, this.angle),
+        new Bullet(ox, oy, this.angle + SPREAD),
+      ];
+    }
     return [new Bullet(ox, oy, this.angle)];
   }
 
@@ -287,7 +299,9 @@ class Ship {
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    ctx.strokeStyle = this.speedBoost > 0 ? '#0ff' : '#fff';
+    ctx.strokeStyle = this.tripleShot > 0 ? '#f0f'
+                      : this.speedBoost > 0 ? '#0ff'
+                      : '#fff';
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
@@ -356,6 +370,10 @@ class SpeedPowerup {
     this.dead = false;
   }
 
+  collect(ship) {
+    ship.speedBoost = 5;
+  }
+
   update(dt) {
     this.ttl -= dt;
     if (this.ttl <= 0) this.dead = true;
@@ -382,6 +400,48 @@ class SpeedPowerup {
     ctx.lineTo(this.x, this.y - 1);
     ctx.closePath();
     ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Power-up de disparo triple ────────────────────────────────────────────────
+class TripleShotPowerup {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 10;
+    this.ttl = 8;       // vida útil en segundos
+    this.dead = false;
+  }
+
+  collect(ship) {
+    ship.tripleShot = 5;
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Parpadeo en los últimos 2 segundos
+    if (this.ttl < 2 && Math.floor(this.ttl * 6) % 2 === 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = '#f0f';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Símbolo: 3 líneas en abanico apuntando hacia arriba
+    const L = 6;
+    for (const a of [-0.5, 0, 0.5]) {
+      ctx.beginPath();
+      ctx.moveTo(this.x, this.y + 4);
+      ctx.lineTo(this.x + Math.sin(a) * L * 1.6, this.y + 4 - Math.cos(a) * L * 1.6);
+      ctx.stroke();
+    }
     ctx.restore();
   }
 }
@@ -474,7 +534,15 @@ function update(dt) {
     debris.forEach(d => d.update(dt));
     debris = debris.filter(d => !d.dead);
     asteroids.forEach(a => a.update(dt));
-    if (deadTimer <= 0) { state = 'playing'; ship.reset(); }
+    if (deadTimer <= 0) {
+      state = 'playing';
+      // Conserva los efectos activos a través de la muerte (reset() los pondría a 0)
+      const boost  = ship.speedBoost;
+      const triple = ship.tripleShot;
+      ship.reset();
+      ship.speedBoost = boost;
+      ship.tripleShot = triple;
+    }
     return;
   }
 
@@ -516,6 +584,8 @@ function update(dt) {
         newAsteroids.push(...a.split());
         // 8% de probabilidad de soltar power-up de velocidad
         if (Math.random() < 0.08) powerups.push(new SpeedPowerup(a.x, a.y));
+        // 8% de probabilidad de soltar power-up de disparo triple
+        if (Math.random() < 0.08) powerups.push(new TripleShotPowerup(a.x, a.y));
       }
     }
   }
@@ -526,19 +596,20 @@ function update(dt) {
   if (ship.invincible <= 0) {
     for (const a of asteroids) {
       if (dist(ship, a) < ship.radius + a.radius * 0.82) {
-        // Si tenía boost activo, reinicia el timer a 5s en la nueva vida
+        // Si tenía algún efecto activo, reinicia su timer a 5s en la nueva vida
         if (ship.speedBoost > 0) ship.speedBoost = 5;
+        if (ship.tripleShot > 0) ship.tripleShot = 5;
         killShip();
         break;
       }
     }
   }
 
-  // Nave vs power-up de velocidad
+  // Nave vs power-ups
   for (const p of powerups) {
     if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
       p.dead = true;
-      ship.speedBoost = 5;
+      p.collect(ship);
     }
   }
 
@@ -582,6 +653,13 @@ function drawHUD() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#0ff';
     ctx.fillText(`VELOCIDAD ${ship.speedBoost.toFixed(1)}s`, W - 14, 46);
+  }
+
+  // Indicador de disparo triple
+  if (ship.tripleShot > 0) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#f0f';
+    ctx.fillText(`TRIPLE ${ship.tripleShot.toFixed(1)}s`, W - 14, 64);
   }
 }
 
