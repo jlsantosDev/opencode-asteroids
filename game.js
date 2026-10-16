@@ -230,6 +230,8 @@ const SKIN_BASE = {
   detalle: null,                        // polilínea opcional (sin cerrar)
   bala:    '#fff',                      // color de las balas
   acento:  '#0ff',                      // trazo mientras dura el boost
+  escala:  1,                           // tamaño relativo de la silueta y la colisión
+  multiplicador: 1,                     // multiplicador de puntos al destruir asteroides
 };
 
 const SKINS = [
@@ -283,11 +285,25 @@ const SKINS = [
     elipse: [11, 17],
     detalle: [[5, -5], [10, 0], [5, 5]],   // burbuja de la cabina, en la nariz
   },
+  {
+    ...SKIN_BASE,
+    nombre: 'Ámbar',
+    trazo:  '#ffd700',                    // contorno amarillo
+    relleno: 'rgba(255, 215, 0, 0.45)',   // fondo amarillo
+    llama:  'rgba(255, 215, 0, 0.85)',
+    tobera: [-17, 4],
+    bala:   '#ffd700',
+    escala: 1.25,                         // un poco más grande que las demás
+    multiplicador: 2,                     // doble de puntos por asteroide
+    // Crucero de doble cola: flecha con aletas traseras y muesca en la popa
+    puntos: [[26, 0], [2, -8], [-14, -14], [-9, -4], [-9, 4], [-14, 14], [2, 8]],
+  },
 ];
 
 // Traza la silueta de una piel en coordenadas locales, escalada.
 // La usan la nave y los iconos de vidas del HUD para que siempre coincidan.
 function trazarSilueta(skin, escala = 1) {
+  escala *= skin.escala || 1;
   ctx.beginPath();
   if (skin.elipse) {
     ctx.ellipse(0, 0, skin.elipse[0] * escala, skin.elipse[1] * escala,
@@ -314,7 +330,7 @@ class Ship {
     this.angle  = -Math.PI / 2;
     this.vx     = 0;
     this.vy     = 0;
-    this.radius = 12;
+    this.radius = 12 * SKINS[skinIndex].escala;   // escala con la piel activa
     this.thrusting     = false;
     this.invincible    = 3;
     this.shootCooldown = 0;
@@ -361,7 +377,7 @@ class Ship {
   tryShoot() {
     if (this.shootCooldown > 0 || this.dead) return [];
     this.shootCooldown = 0.2;
-    const NOSE = 21;
+    const NOSE = 21 * SKINS[skinIndex].escala;   // punta de la nariz, escala con la piel
     const ox = this.x + Math.cos(this.angle) * NOSE;
     const oy = this.y + Math.sin(this.angle) * NOSE;
     if (this.tripleShot > 0) {
@@ -423,7 +439,7 @@ class Ship {
 
     // Anillo del escudo (no rota con la nave)
     if (this.shield > 0) {
-      const SHIELD_R = 22;
+      const SHIELD_R = 22 * skin.escala;   // envuelve también a las naves grandes
       // Parpadeo de aviso cuando queda poco escudo
       if (!(this.shield < 1.5 && Math.floor(this.shield * 8) % 2 === 0)) {
         const alpha = 0.3 + 0.15 * Math.sin(performance.now() / 120);
@@ -740,7 +756,8 @@ function update(dt) {
       if (!a.dead && !b.dead && dist(b, a) < a.radius) {
         b.dead = true;
         a.dead = true;
-        score += a.points;
+        // La piel activa puede multiplicar los puntos (la nave Ámbar rinde x2)
+        score += a.points * SKINS[skinIndex].multiplicador;
         a.onShotDown();
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
