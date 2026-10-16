@@ -50,7 +50,7 @@ class Bullet {
   }
 
   draw() {
-    ctx.fillStyle = '#fff';
+    ctx.fillStyle = SKINS[skinIndex].bala;
     ctx.beginPath();
     ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
     ctx.fill();
@@ -220,6 +220,87 @@ function spawnDebris(x, y, count = 18) {
   for (let i = 0; i < count; i++) debris.push(new Debris(x, y));
 }
 
+// ── Piel de la nave (skins) ─────────────────────────────────────────────────
+// Registro data-driven: la silueta son coordenadas locales de la nave
+// (nariz hacia +x), en el mismo espacio que el radio de colisión.
+const SKIN_BASE = {
+  relleno: null,                        // sin relleno por defecto
+  llama:   'rgba(255, 130, 0, 0.85)',   // color de la llama del propulsor
+  tobera:  [-8, 4],                     // [x de la boca, semiancho de la llama]
+  detalle: null,                        // polilínea opcional (sin cerrar)
+  bala:    '#fff',                      // color de las balas
+  acento:  '#0ff',                      // trazo mientras dura el boost
+};
+
+const SKINS = [
+  {
+    ...SKIN_BASE,
+    nombre: 'Clásica',
+    trazo:  '#fff',
+    puntos: [[20, 0], [-12, -9], [-7, 0], [-12, 9]],   // triángulo con muesca
+  },
+  {
+    ...SKIN_BASE,
+    nombre: 'Delta',
+    trazo:  '#7df9ff',
+    relleno: 'rgba(125, 249, 255, 0.12)',
+    llama:  'rgba(125, 249, 255, 0.85)',
+    tobera: [-12, 3],
+    bala:   '#7df9ff',
+    acento: '#fff',                     // su trazo ya es cian: invierte el aviso
+    puntos: [[22, 0], [-6, -4], [-18, -15], [-12, -2], [-12, 2], [-18, 15], [-6, 4]],
+  },
+  {
+    ...SKIN_BASE,
+    nombre: 'Daga',
+    trazo:  '#ff5df1',
+    relleno: 'rgba(255, 93, 241, 0.10)',
+    llama:  'rgba(255, 93, 241, 0.85)',
+    tobera: [-12, 3],
+    bala:   '#ff5df1',
+    // Hoja estrecha con la cola hendida: se lee como un dardo, no como un pétalo
+    puntos: [[26, 0], [4, -5], [-8, -7], [-17, -3], [-11, 0], [-17, 3], [-8, 7], [4, 5]],
+  },
+  {
+    ...SKIN_BASE,
+    nombre: 'Cruzada',
+    trazo:  '#ffd23f',
+    tobera: [-12, 3],
+    bala:   '#ffd23f',
+    puntos: [[16, 0], [3, -3], [3, -13], [-3, -13], [-3, -3], [-12, -3],
+             [-12, 3], [-3, 3], [-3, 13], [3, 13], [3, 3]],
+  },
+  {
+    ...SKIN_BASE,
+    nombre: 'Disco',
+    trazo:  '#a0ff8f',
+    relleno: 'rgba(160, 255, 143, 0.10)',
+    llama:  'rgba(160, 255, 143, 0.85)',
+    tobera: [-13, 4],
+    bala:   '#a0ff8f',
+    // +x es la nariz y al apuntar hacia arriba se convierte en el eje vertical:
+    // por eso el radio mayor va en ry, para que al vuelo se lea un disco ancho.
+    elipse: [11, 17],
+    detalle: [[5, -5], [10, 0], [5, 5]],   // burbuja de la cabina, en la nariz
+  },
+];
+
+// Traza la silueta de una piel en coordenadas locales, escalada.
+// La usan la nave y los iconos de vidas del HUD para que siempre coincidan.
+function trazarSilueta(skin, escala = 1) {
+  ctx.beginPath();
+  if (skin.elipse) {
+    ctx.ellipse(0, 0, skin.elipse[0] * escala, skin.elipse[1] * escala,
+                0, 0, Math.PI * 2);
+    return;
+  }
+  const p = skin.puntos;
+  ctx.moveTo(p[0][0] * escala, p[0][1] * escala);
+  for (let i = 1; i < p.length; i++)
+    ctx.lineTo(p[i][0] * escala, p[i][1] * escala);
+  ctx.closePath();
+}
+
 // ── Ship ──────────────────────────────────────────────────────────────────────
 class Ship {
   constructor() { this.reset(); }
@@ -284,29 +365,40 @@ class Ship {
     // Parpadeo durante invencibilidad de reaparición
     if (this.invincible > 0 && Math.floor(this.invincible * 8) % 2 === 0) return;
 
+    const skin = SKINS[skinIndex];
+
     ctx.save();
     ctx.translate(this.x, this.y);
     ctx.rotate(this.angle);
-    ctx.strokeStyle = this.speedBoost > 0 ? '#0ff' : '#fff';
+    ctx.strokeStyle = this.speedBoost > 0 ? skin.acento : skin.trazo;
     ctx.lineWidth   = 1.5;
     ctx.lineJoin    = 'round';
 
-    // Silueta clásica: triángulo con muesca trasera
-    ctx.beginPath();
-    ctx.moveTo( 20,  0);   // nariz
-    ctx.lineTo(-12, -9);   // ala izquierda
-    ctx.lineTo( -7,  0);   // muesca trasera
-    ctx.lineTo(-12,  9);   // ala derecha
-    ctx.closePath();
+    // Silueta de la piel activa
+    trazarSilueta(skin);
+    if (skin.relleno) {
+      ctx.fillStyle = skin.relleno;
+      ctx.fill();
+    }
     ctx.stroke();
+
+    // Detalle interior (cabina, costillas): solo si la piel lo define
+    if (skin.detalle) {
+      const d = skin.detalle;
+      ctx.beginPath();
+      ctx.moveTo(d[0][0], d[0][1]);
+      for (let i = 1; i < d.length; i++) ctx.lineTo(d[i][0], d[i][1]);
+      ctx.stroke();
+    }
 
     // Llama del propulsor
     if (this.thrusting && Math.random() > 0.35) {
+      const [boca, ancho] = skin.tobera;
       ctx.beginPath();
-      ctx.moveTo(-8, -4);
-      ctx.lineTo(-8 - rand(6, 14), 0);
-      ctx.lineTo(-8,  4);
-      ctx.strokeStyle = 'rgba(255, 130, 0, 0.85)';
+      ctx.moveTo(boca, -ancho);
+      ctx.lineTo(boca - rand(6, 14), 0);
+      ctx.lineTo(boca,  ancho);
+      ctx.strokeStyle = skin.llama;
       ctx.stroke();
     }
 
@@ -387,6 +479,11 @@ class SpeedPowerup {
 }
 
 // ── Estado del juego ──────────────────────────────────────────────────────────
+// La piel elegida vive fuera de initGame(): se crea una Ship nueva al reiniciar
+// y reset() se llama en cada vida, así que guardarlo ahí la perdería.
+let skinIndex = 0;
+let skinFlash = 0;   // segundos restantes del aviso del HUD al cambiar de piel
+
 let ship, bullets, asteroids, particles, powerups, debris;
 let specialTimer;
 let score, lives, level;
@@ -458,6 +555,14 @@ function killShip() {
 
 // ── Update ────────────────────────────────────────────────────────────────────
 function update(dt) {
+  // Antes de las ramas de estado: en 'dead' y 'gameover' el update sale temprano
+  // y la tecla quedaría muerta justo cuando uno quiere probar pieles nuevas.
+  if (pressed('KeyS')) {
+    skinIndex = (skinIndex + 1) % SKINS.length;
+    skinFlash = 2;
+  }
+  if (skinFlash > 0) skinFlash -= dt;
+
   if (state === 'gameover') {
     if (pressed('Space')) initGame();
     particles.forEach(p => p.update(dt));
@@ -547,19 +652,21 @@ function update(dt) {
 }
 
 // ── Draw ──────────────────────────────────────────────────────────────────────
+const ESCALA_ICONO = 0.45;   // el triángulo clásico medía 9 px de nariz vs 20
+
 function drawLifeIcon(x, y) {
   ctx.save();
   ctx.translate(x, y);
   ctx.rotate(-Math.PI / 2);
-  ctx.strokeStyle = '#fff';
+  const skin = SKINS[skinIndex];
+  ctx.strokeStyle = skin.trazo;
   ctx.lineWidth   = 1.2;
   ctx.lineJoin    = 'round';
-  ctx.beginPath();
-  ctx.moveTo( 9,  0);
-  ctx.lineTo(-6, -5);
-  ctx.lineTo(-3,  0);
-  ctx.lineTo(-6,  5);
-  ctx.closePath();
+  trazarSilueta(skin, ESCALA_ICONO);
+  if (skin.relleno) {
+    ctx.fillStyle = skin.relleno;
+    ctx.fill();
+  }
   ctx.stroke();
   ctx.restore();
 }
@@ -582,6 +689,16 @@ function drawHUD() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#0ff';
     ctx.fillText(`VELOCIDAD ${ship.speedBoost.toFixed(1)}s`, W - 14, 46);
+  }
+
+  // Nombre de la piel: único aviso visible cuando la nave no está en escena
+  // (game over, o reapareciendo), donde ni el sprite ni los iconos ayudan.
+  if (skinFlash > 0) {
+    ctx.textAlign = 'left';
+    ctx.font      = '13px monospace';
+    ctx.fillStyle = 'rgba(255,255,255,0.75)';
+    ctx.fillText(`PIEL: ${SKINS[skinIndex].nombre}  [S]`, 14, H - 14);
+    ctx.font      = '15px monospace';
   }
 }
 

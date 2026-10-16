@@ -24,11 +24,12 @@ Luego visita `http://localhost:3000`.
 
 ## Controles
 
-| Tecla     | Acción     |
-| --------- | ---------- |
-| `←` `→`   | Rotar nave |
-| `↑`       | Propulsar  |
-| `Espacio` | Disparar   |
+| Tecla     | Acción                     |
+| --------- | -------------------------- |
+| `←` `→`   | Rotar nave                 |
+| `↑`       | Propulsar                  |
+| `Espacio` | Disparar                   |
+| `S`       | Cambiar la piel de la nave |
 
 ## Puntuación
 
