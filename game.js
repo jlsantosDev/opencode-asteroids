@@ -303,6 +303,7 @@ function trazarSilueta(skin, escala = 1) {
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
 const SPREAD = 0.18;   // rad: apertura de las balas laterales del disparo triple (~10°)
+const SHIELD_DURATION = 6;   // segundos de escudo al recoger el power-up
 
 class Ship {
   constructor() { this.reset(); }
@@ -319,6 +320,7 @@ class Ship {
     this.shootCooldown = 0;
     this.speedBoost    = 0;   // segundos restantes de velocidad x2
     this.tripleShot    = 0;   // segundos restantes de disparo triple
+    this.shield        = 0;   // segundos restantes de escudo
     this.dead          = false;
   }
 
@@ -327,6 +329,7 @@ class Ship {
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
     if (this.tripleShot    > 0) this.tripleShot    -= dt;
+    if (this.shield        > 0) this.shield        -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = this.speedBoost > 0 ? 520 : 260;  // px/s² (doble con boost)
@@ -417,6 +420,20 @@ class Ship {
     }
 
     ctx.restore();
+
+    // Anillo del escudo (no rota con la nave)
+    if (this.shield > 0) {
+      const SHIELD_R = 22;
+      // Parpadeo de aviso cuando queda poco escudo
+      if (!(this.shield < 1.5 && Math.floor(this.shield * 8) % 2 === 0)) {
+        const alpha = 0.3 + 0.15 * Math.sin(performance.now() / 120);
+        ctx.strokeStyle = `rgba(80, 255, 160, ${alpha.toFixed(2)})`;
+        ctx.lineWidth   = 2;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, SHIELD_R, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -534,6 +551,46 @@ class TripleShotPowerup {
       ctx.lineTo(this.x + Math.sin(a) * L * 1.6, this.y + 4 - Math.cos(a) * L * 1.6);
       ctx.stroke();
     }
+    ctx.restore();
+  }
+}
+
+// ── Power-up de escudo ────────────────────────────────────────────────────────
+class ShieldPowerup {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 10;
+    this.ttl = 8;       // vida útil en segundos
+    this.dead = false;
+  }
+
+  collect(ship) {
+    ship.shield = SHIELD_DURATION;
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Parpadeo en los últimos 2 segundos
+    if (this.ttl < 2 && Math.floor(this.ttl * 6) % 2 === 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = '#4f4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Símbolo de escudo (cúpula con base)
+    ctx.beginPath();
+    ctx.arc(this.x, this.y + 4, 6, Math.PI, Math.PI * 2);
+    ctx.moveTo(this.x - 6, this.y + 4);
+    ctx.lineTo(this.x + 6, this.y + 4);
+    ctx.stroke();
     ctx.restore();
   }
 }
@@ -687,10 +744,10 @@ function update(dt) {
         a.onShotDown();
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
-        // 8% de probabilidad de soltar power-up de velocidad
+        // 8% de probabilidad de soltar cada power-up (las tiradas son independientes)
         if (Math.random() < 0.08) powerups.push(new SpeedPowerup(a.x, a.y));
-        // 8% de probabilidad de soltar power-up de disparo triple
         if (Math.random() < 0.08) powerups.push(new TripleShotPowerup(a.x, a.y));
+        if (Math.random() < 0.08) powerups.push(new ShieldPowerup(a.x, a.y));
       }
     }
   }
@@ -701,6 +758,12 @@ function update(dt) {
   if (ship.invincible <= 0) {
     for (const a of asteroids) {
       if (dist(ship, a) < ship.radius + a.radius * 0.82) {
+        if (ship.shield > 0) {
+          // El escudo vaporiza el asteroide al contacto: sin puntos ni escisión
+          a.dead = true;
+          explode(a.x, a.y, a.size * 5);
+          continue;
+        }
         // Si tenía algún efecto activo, reinicia su timer a 5s en la nueva vida
         if (ship.speedBoost > 0) ship.speedBoost = 5;
         if (ship.tripleShot > 0) ship.tripleShot = 5;
@@ -708,6 +771,7 @@ function update(dt) {
         break;
       }
     }
+    asteroids = asteroids.filter(a => !a.dead);
   }
 
   // Nave vs power-ups
@@ -767,6 +831,13 @@ function drawHUD() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#f0f';
     ctx.fillText(`TRIPLE ${ship.tripleShot.toFixed(1)}s`, W - 14, 64);
+  }
+
+  // Indicador de escudo
+  if (ship.shield > 0) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#4f4';
+    ctx.fillText(`ESCUDO ${ship.shield.toFixed(1)}s`, W - 14, 82);
   }
 
   // Nombre de la piel: único aviso visible cuando la nave no está en escena
