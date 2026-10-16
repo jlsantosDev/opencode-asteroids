@@ -221,6 +221,8 @@ function spawnDebris(x, y, count = 18) {
 }
 
 // ── Ship ──────────────────────────────────────────────────────────────────────
+const SHIELD_DURATION = 6;   // segundos de escudo al recoger el power-up
+
 class Ship {
   constructor() { this.reset(); }
 
@@ -235,6 +237,7 @@ class Ship {
     this.invincible    = 3;
     this.shootCooldown = 0;
     this.speedBoost    = 0;   // segundos restantes de velocidad x2
+    this.shield        = 0;   // segundos restantes de escudo
     this.dead          = false;
   }
 
@@ -242,6 +245,7 @@ class Ship {
     if (this.dead) return;
     if (this.invincible    > 0) this.invincible    -= dt;
     if (this.shootCooldown > 0) this.shootCooldown -= dt;
+    if (this.shield        > 0) this.shield        -= dt;
 
     const ROT   = 3.5;   // rad/s
     const THRUST = this.speedBoost > 0 ? 520 : 260;  // px/s² (doble con boost)
@@ -311,6 +315,20 @@ class Ship {
     }
 
     ctx.restore();
+
+    // Anillo del escudo (no rota con la nave)
+    if (this.shield > 0) {
+      const SHIELD_R = 22;
+      // Parpadeo de aviso cuando queda poco escudo
+      if (!(this.shield < 1.5 && Math.floor(this.shield * 8) % 2 === 0)) {
+        const alpha = 0.3 + 0.15 * Math.sin(performance.now() / 120);
+        ctx.strokeStyle = `rgba(80, 255, 160, ${alpha.toFixed(2)})`;
+        ctx.lineWidth   = 2;
+        ctx.beginPath();
+        ctx.arc(this.x, this.y, SHIELD_R, 0, Math.PI * 2);
+        ctx.stroke();
+      }
+    }
   }
 }
 
@@ -381,6 +399,42 @@ class SpeedPowerup {
     ctx.lineTo(this.x + 3, this.y - 1);
     ctx.lineTo(this.x, this.y - 1);
     ctx.closePath();
+    ctx.stroke();
+    ctx.restore();
+  }
+}
+
+// ── Power-up de escudo ────────────────────────────────────────────────────────
+class ShieldPowerup {
+  constructor(x, y) {
+    this.x = x;
+    this.y = y;
+    this.radius = 10;
+    this.ttl = 8;       // vida útil en segundos
+    this.dead = false;
+  }
+
+  update(dt) {
+    this.ttl -= dt;
+    if (this.ttl <= 0) this.dead = true;
+  }
+
+  draw() {
+    // Parpadeo en los últimos 2 segundos
+    if (this.ttl < 2 && Math.floor(this.ttl * 6) % 2 === 0) return;
+
+    ctx.save();
+    ctx.strokeStyle = '#4f4';
+    ctx.lineWidth = 1.5;
+    ctx.beginPath();
+    ctx.arc(this.x, this.y, this.radius, 0, Math.PI * 2);
+    ctx.stroke();
+
+    // Símbolo de escudo (cúpula con base)
+    ctx.beginPath();
+    ctx.arc(this.x, this.y + 4, 6, Math.PI, Math.PI * 2);
+    ctx.moveTo(this.x - 6, this.y + 4);
+    ctx.lineTo(this.x + 6, this.y + 4);
     ctx.stroke();
     ctx.restore();
   }
@@ -514,8 +568,9 @@ function update(dt) {
         a.onShotDown();
         explode(a.x, a.y, a.size * 5);
         newAsteroids.push(...a.split());
-        // 8% de probabilidad de soltar power-up de velocidad
+        // 8% de probabilidad de soltar cada power-up (las tiradas son independientes)
         if (Math.random() < 0.08) powerups.push(new SpeedPowerup(a.x, a.y));
+        if (Math.random() < 0.08) powerups.push(new ShieldPowerup(a.x, a.y));
       }
     }
   }
@@ -526,19 +581,27 @@ function update(dt) {
   if (ship.invincible <= 0) {
     for (const a of asteroids) {
       if (dist(ship, a) < ship.radius + a.radius * 0.82) {
+        if (ship.shield > 0) {
+          // El escudo vaporiza el asteroide al contacto: sin puntos ni escisión
+          a.dead = true;
+          explode(a.x, a.y, a.size * 5);
+          continue;
+        }
         // Si tenía boost activo, reinicia el timer a 5s en la nueva vida
         if (ship.speedBoost > 0) ship.speedBoost = 5;
         killShip();
         break;
       }
     }
+    asteroids = asteroids.filter(a => !a.dead);
   }
 
-  // Nave vs power-up de velocidad
+  // Nave vs power-ups
   for (const p of powerups) {
     if (!p.dead && dist(ship, p) < ship.radius + p.radius) {
       p.dead = true;
-      ship.speedBoost = 5;
+      if (p instanceof ShieldPowerup) ship.shield = SHIELD_DURATION;
+      else ship.speedBoost = 5;
     }
   }
 
@@ -582,6 +645,13 @@ function drawHUD() {
     ctx.textAlign = 'right';
     ctx.fillStyle = '#0ff';
     ctx.fillText(`VELOCIDAD ${ship.speedBoost.toFixed(1)}s`, W - 14, 46);
+  }
+
+  // Indicador de escudo
+  if (ship.shield > 0) {
+    ctx.textAlign = 'right';
+    ctx.fillStyle = '#4f4';
+    ctx.fillText(`ESCUDO ${ship.shield.toFixed(1)}s`, W - 14, 66);
   }
 }
 
